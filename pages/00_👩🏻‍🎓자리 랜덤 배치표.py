@@ -303,8 +303,8 @@ def draw_pdf_page(c, matrix, seating_mode, view_mode, bun_dan, title):
     width, height = landscape(A4)
 
     # 간격 조정값
-    teacher_desk_adjust = 20   # 교사용: 교탁을 살짝 위로
-    student_desk_gap = 20      # 학생용: 교탁과 책상 간 간격
+    teacher_desk_adjust = 30   # 교사용: 교탁을 살짝 위로
+    student_desk_gap = 30      # 학생용: 교탁과 책상 간 간격
 
     margin_y = 80
     gap_x = 10
@@ -348,7 +348,7 @@ def draw_pdf_page(c, matrix, seating_mode, view_mode, bun_dan, title):
         start_y = height - margin_y - cell_h - teacher_desk_adjust
     else:
         # 학생용: 교탁과 책상 사이 간격 확보 → 책상은 아래에서 시작
-        start_y = height - margin_y - cell_h - 60 - student_desk_gap
+        start_y = height - margin_y - cell_h - 50 - student_desk_gap
 
     # 5) 좌석 그리기
     for r, row in enumerate(matrix_to_draw):
