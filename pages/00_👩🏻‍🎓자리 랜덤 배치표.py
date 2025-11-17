@@ -302,55 +302,50 @@ def render_chart(matrix, view_mode, bun_dan, seating_mode):
 def draw_pdf_page(c, matrix, seating_mode, view_mode, bun_dan, title):
     width, height = landscape(A4)
 
-    # 간격 조정값
-    teacher_desk_adjust = 30   # 교사용: 교탁을 살짝 위로
-    student_desk_gap = 30      # 학생용: 교탁과 책상 간 간격
-
     margin_y = 80
     gap_x = 10
     gap_y = 18
     pair_gap = 22 if seating_mode == "Paired" else 0
 
-    # 1) 행 순서
+    # ---------- 1) 행 순서 (교사용/학생용) ----------
     if view_mode == "teacher":
-        matrix_to_draw = matrix[::-1]   # 교사용: 앞줄이 아래
+        # 교탁 기준: 앞줄이 아래에 오도록 뒤집어서
+        matrix_to_draw = matrix[::-1]
     else:
-        matrix_to_draw = matrix         # 학생용: 앞줄이 위
+        # 학생용: 앞줄이 위에 보이도록 그대로
+        matrix_to_draw = matrix
 
     rows = len(matrix_to_draw)
     cols = len(matrix_to_draw[0])
 
-    # 2) 제목 위치
+    # ---------- 2) 제목 위치 ----------
     if view_mode == "teacher":
+        # 교사용: 위쪽에 제목
         title_y = height - 40
     else:
-        title_y = margin_y / 2   # 학생용은 아래쪽
+        # 학생용: 아래쪽에 제목
+        title_y = margin_y / 2
 
     c.setFont(KOREAN_FONT, 26)
     c.drawCentredString(width / 2, title_y, title)
 
-    # 3) 좌석 영역 계산 (가운데 정렬)
+    # ---------- 3) 좌석 영역 계산 (가운데 정렬) ----------
     available_h = height - margin_y * 2 - 80
     cell_h = (available_h - gap_y * (rows - 1)) / rows if rows > 0 else 40
 
     total_base_gaps = (cols - 1) * gap_x
     total_pair_gaps = (bun_dan - 1) * pair_gap if seating_mode == "Paired" else 0
 
-    available_w = width - 80  # 좌우 여백 합 약 80
+    available_w = width - 80  # 양쪽 대략 40pt 여백
     cell_w = (available_w - total_base_gaps - total_pair_gaps) / cols if cols > 0 else 40
 
     total_width = cols * cell_w + total_base_gaps + total_pair_gaps
     start_x = (width - total_width) / 2  # 가로 중앙
 
-    # 4) 세로 시작 위치 (교사용/학생용 다르게)
-    if view_mode == "teacher":
-        # 교사용: 기존보다 살짝 위로 올림
-        start_y = height - margin_y - cell_h - teacher_desk_adjust
-    else:
-        # 학생용: 교탁과 책상 사이 간격 확보 → 책상은 아래에서 시작
-        start_y = height - margin_y - cell_h - 50 - student_desk_gap
+    # 세로 시작점: 위에서 아래로
+    start_y = height - margin_y - cell_h
 
-    # 5) 좌석 그리기
+    # ---------- 4) 좌석 사각형/이름 그리기 ----------
     for r, row in enumerate(matrix_to_draw):
         y = start_y - r * (cell_h + gap_y)
         x = start_x
@@ -378,17 +373,17 @@ def draw_pdf_page(c, matrix, seating_mode, view_mode, bun_dan, title):
             if seating_mode == "Paired" and c_idx % 2 == 1 and c_idx != cols - 1:
                 x += pair_gap
 
-    # 6) 교탁 위치
+    # ---------- 5) 교탁 위치 ----------
     desk_w = 130
     desk_h = 48
     desk_x = width / 2 - desk_w / 2
 
     if view_mode == "teacher":
-        # 교사용: 이전보다 살짝 위
-        desk_y = margin_y - desk_h + teacher_desk_adjust
+        # 교사용: 교탁은 맨 아래 중앙
+        desk_y = margin_y - desk_h
     else:
-        # 학생용: 교탁을 위로, 책상과 간격 벌림
-        desk_y = height - margin_y + 20 + student_desk_gap
+        # 학생용: 교탁은 맨 위 중앙 (앞쪽)
+        desk_y = height - margin_y + 10
 
     c.setFillColor(HexColor("#eff6ff"))
     c.setStrokeColor(HexColor("#2563eb"))
@@ -440,12 +435,7 @@ with col1:
         format_func=lambda x: "혼자 앉기" if x == "Single" else "짝으로 앉기",
     )
 with col2:
-    bun_dan = st.number_input(
-        "분단 수",
-        min_value=2,
-        max_value=10,
-        value=5 if seating_mode == "Paired" else 4,
-    )
+    bun_dan = st.number_input("분단 수", min_value=2, max_value=10, value=5 if seating_mode == "Paired" else 4)
     rows = st.number_input("줄 수(행)", min_value=2, max_value=10, value=6)
 
 
@@ -497,12 +487,8 @@ if "matrix" in st.session_state:
     )
 
     # PDF 다운로드
-    teacher_pdf = make_pdf(
-        matrix, seating_mode, "teacher", bun_dan, "교사용 좌석 배치표"
-    )
-    student_pdf = make_pdf(
-        matrix, seating_mode, "student", bun_dan, "학생용 좌석 배치표"
-    )
+    teacher_pdf = make_pdf(matrix, seating_mode, "teacher", bun_dan, "교사용 좌석 배치표")
+    student_pdf = make_pdf(matrix, seating_mode, "student", bun_dan, "학생용 좌석 배치표")
     both_pdf = make_pdf_both(matrix, seating_mode, bun_dan)
 
     st.markdown("---")
