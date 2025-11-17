@@ -343,7 +343,7 @@ def draw_pdf_page(c, matrix, seating_mode, view_mode, bun_dan, title):
     start_x = (width - total_width) / 2  # 가로 중앙
 
     # 세로 시작점: 위에서 아래로
-        # 세로 시작점: 위에서 아래로 (교사용 / 학생용 따로)     if view_mode == "teacher":         # 교사용: 기존 위치         start_y = height - margin_y - cell_h     else:         # 학생용: 책상을 조금 더 아래로 내리고 싶을 때 (숫자 60은 직접 조절 가능)         start_y = height - margin_y - cell_h - 60
+    start_y = height - margin_y - cell_h-30
 
     # ---------- 4) 좌석 사각형/이름 그리기 ----------
     for r, row in enumerate(matrix_to_draw):
