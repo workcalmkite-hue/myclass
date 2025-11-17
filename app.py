@@ -10,6 +10,10 @@ from reportlab.lib.colors import HexColor, black
 from reportlab.pdfbase import pdfmetrics
 from reportlab.pdfbase.ttfonts import TTFont
 
+import gspread
+from google.oauth2.service_account import Credentials
+
+
 # =========================
 # 0. 한글 폰트 등록 (MaruBuri)
 # =========================
@@ -24,26 +28,94 @@ else:
 
 
 # =========================
-# 1. 학생 데이터 (샘플)
-#    → 나중에 구글 시트로 교체 가능
+# 1. Google Sheets 학생 데이터 로드
 # =========================
 def load_student_data():
-    data = {
-        "Number": list(range(1, 25)),
-        "Name": [
-            "김철수", "이영희", "박지민", "최민준", "정하늘", "윤서연",
-            "강도현", "한지우", "오민재", "서예진", "신현우", "유진아",
-            "임태경", "장미나", "전호준", "조아라", "차승원", "허다인",
-            "구범수", "나유리", "류준열", "문채원", "변요한", "송혜교"
-        ],
-        "Gender": [
-            "M", "F", "F", "M", "M", "F",
-            "M", "F", "M", "F", "M", "F",
-            "M", "F", "M", "F", "M", "F",
-            "M", "F", "M", "F", "M", "F",
-        ],
-    }
-    df = pd.DataFrame(data)
+    """
+    Google Sheets에서 학생 데이터를 불러옵니다.
+    .streamlit/secrets.toml 예시:
+
+    [gcp_service_account]
+    type = "service_account"
+    project_id = "..."
+    private_key_id = "..."
+    private_key = """-----BEGIN PRIVATE KEY-----\n...\n-----END PRIVATE KEY-----"""
+    client_email = "..."
+    client_id = "..."
+    auth_uri = "https://accounts.google.com/o/oauth2/auth"
+    token_uri = "https://oauth2.googleapis.com/token"
+    auth_provider_x509_cert_url = "https://www.googleapis.com/oauth2/v1/certs"
+    client_x509_cert_url = "..."
+
+    spreadsheet_id = "스프레드시트ID"
+    """
+    try:
+        sa_info = st.secrets["gcp_service_account"]
+        spreadsheet_id = st.secrets["spreadsheet_id"]
+    except Exception as e:
+        st.error("❌ Streamlit secrets에 gcp_service_account / spreadsheet_id가 설정되어 있는지 확인해 주세요.")
+        raise e
+
+    scopes = ["https://www.googleapis.com/auth/spreadsheets.readonly"]
+    creds = Credentials.from_service_account_info(sa_info, scopes=scopes)
+    client = gspread.authorize(creds)
+
+    sh = client.open_by_key(spreadsheet_id)
+
+    # 기본: 첫 번째 시트 사용
+    ws = sh.sheet1
+    # 특정 시트명을 쓰고 싶다면:
+    # ws = sh.worksheet("1반")
+
+    records = ws.get_all_records()
+    if not records:
+        st.warning("⚠️ 구글 시트에 데이터가 없습니다.")
+        return pd.DataFrame(columns=["Number", "Name", "Gender"])
+
+    df = pd.DataFrame(records)
+
+    # 컬럼 이름 매핑
+    col_num_candidates = ["Number", "번호", "NO", "No", "no", "Num"]
+    col_name_candidates = ["Name", "이름"]
+    col_gender_candidates = ["Gender", "성별", "gender", "sex", "Sex"]
+
+    def find_col(candidates):
+        for c in candidates:
+            if c in df.columns:
+                return c
+        return None
+
+    col_num = find_col(col_num_candidates)
+    col_name = find_col(col_name_candidates)
+    col_gender = find_col(col_gender_candidates)
+
+    rename_map = {}
+    if col_num and col_num != "Number":
+        rename_map[col_num] = "Number"
+    if col_name and col_name != "Name":
+        rename_map[col_name] = "Name"
+    if col_gender and col_gender != "Gender":
+        rename_map[col_gender] = "Gender"
+
+    if rename_map:
+        df = df.rename(columns=rename_map)
+
+    needed_cols = []
+    for c in ["Number", "Name", "Gender"]:
+        if c in df.columns:
+            needed_cols.append(c)
+        else:
+            st.warning(f"⚠️ 구글 시트에 '{c}' 컬럼이 없습니다. (선택적으로만 사용됩니다)")
+
+    if not needed_cols:
+        st.error("❌ 'Number', 'Name', 'Gender' 중 하나도 찾지 못했습니다. 시트 헤더를 확인해 주세요.")
+        return pd.DataFrame(columns=["Number", "Name", "Gender"])
+
+    df = df[needed_cols]
+
+    if "Number" in df.columns:
+        df["Number"] = pd.to_numeric(df["Number"], errors="coerce").fillna(df["Number"])
+
     return df
 
 
@@ -135,7 +207,7 @@ def assign_seats(student_list, rows, bun_dan, mode):
 
 
 # =========================
-# 4. HTML / CSS 렌더링
+# 4. HTML / CSS 렌더링 (화면용)
 # =========================
 HTML_STYLE = """
 <style>
@@ -223,11 +295,10 @@ def render_chart(matrix, view_mode, bun_dan, seating_mode):
     if rows == 0:
         return "<div>데이터 없음</div>"
 
-    # 열 수는 한 줄의 길이
     cols = len(matrix[0])
 
-    # 교사용: 교탁에서 볼 때 앞줄이 아래쪽에 보이도록 → 행 순서를 뒤집어 표시
-    # 학생용: 종이로 볼 때 앞줄이 위쪽에 보이도록 → 원래 순서 그대로
+    # 교사용: 교탁에서 볼 때 앞줄이 아래 → 행 순서 뒤집어서 표시
+    # 학생용: 종이로 볼 때 앞줄이 위 → 원래 순서
     display_matrix = matrix[::-1] if view_mode == "teacher" else matrix
 
     grid_style = f"grid-template-columns: repeat({cols}, auto);"
@@ -265,43 +336,46 @@ def render_chart(matrix, view_mode, bun_dan, seating_mode):
 
 
 # =========================
-# 5. PDF 그리기 공통 함수
+# 5. PDF 그리기 (책상 작게 / 간격 넓게 / 폰트 크게)
 # =========================
 def draw_seating_page(c, seating_matrix, seating_mode, view_mode, bun_dan, title_text):
     width, height = landscape(A4)
 
-    # 제목
-    c.setFont(KOREAN_FONT_NAME, 18)
-    c.drawCentredString(width / 2, height - 40, title_text)
+    # 제목 폰트 조금 크게
+    c.setFont(KOREAN_FONT_NAME, 22)
+    c.drawCentredString(width / 2, height - 45, title_text)
 
     rows = len(seating_matrix)
     cols = len(seating_matrix[0]) if rows > 0 else 0
 
-    # 교사용: 교탁 기준에서 앞줄이 아래 → 행 순서를 뒤집어서 그림
-    # 학생용: 종이 기준에서 앞줄이 위 → 원본 순서대로
+    # 교사용: 앞줄이 아래 → 행 순서 뒤집어서 그림
+    # 학생용: 앞줄이 위 → 그대로
     matrix = seating_matrix[::-1] if view_mode == "teacher" else seating_matrix
 
     margin_x = 50
-    margin_y = 80
-    seat_gap_x = 8   # 가로 간격
-    seat_gap_y = 10  # 세로 간격
+    margin_y = 85   # 살짝 넉넉한 여백
 
-    available_height = height - margin_y * 2 - 40
+    # 💡 책상 크기는 작게, 간격은 넓게
+    seat_gap_x = 15   # 가로 간격 크게
+    seat_gap_y = 18   # 세로 간격 크게
+
+    # 사용 가능한 높이 (제목/교탁 공간 제외)
+    available_height = height - margin_y * 2 - 70
     if rows > 0:
         cell_h = (available_height - seat_gap_y * (rows - 1)) / rows
     else:
-        cell_h = 40
+        cell_h = 35  # 기본값 조금 작게
 
     if seating_mode == "Paired":
         seat_cols = bun_dan * 2
-        pair_gap = 12
+        pair_gap = 18  # 분단 사이 간격도 넓게
         if seat_cols > 0:
             total_pair_gaps = (bun_dan - 1) * pair_gap
             total_seat_gaps = (seat_cols - 1) * seat_gap_x
             available_width = width - margin_x * 2 - total_pair_gaps - total_seat_gaps
             cell_w = available_width / seat_cols
         else:
-            cell_w = 40
+            cell_w = 35
     else:
         seat_cols = cols
         pair_gap = 0
@@ -310,7 +384,7 @@ def draw_seating_page(c, seating_matrix, seating_mode, view_mode, bun_dan, title
             available_width = width - margin_x * 2 - total_seat_gaps
             cell_w = available_width / seat_cols
         else:
-            cell_w = 40
+            cell_w = 35
 
     start_y = height - margin_y - cell_h
 
@@ -337,14 +411,15 @@ def draw_seating_page(c, seating_matrix, seating_mode, view_mode, bun_dan, title
 
                 c.setFillColor(black)
                 if seat:
-                    c.setFont(KOREAN_FONT_NAME, 9)
+                    # 💡 폰트 조금 더 크게
+                    c.setFont(KOREAN_FONT_NAME, 11)
                     c.drawCentredString(
                         x + cell_w / 2,
                         y + cell_h / 2 - 4,
                         seat["name"],
                     )
                 else:
-                    c.setFont(KOREAN_FONT_NAME, 8)
+                    c.setFont(KOREAN_FONT_NAME, 10)
                     c.drawCentredString(
                         x + cell_w / 2,
                         y + cell_h / 2 - 4,
@@ -366,14 +441,14 @@ def draw_seating_page(c, seating_matrix, seating_mode, view_mode, bun_dan, title
 
                 c.setFillColor(black)
                 if seat:
-                    c.setFont(KOREAN_FONT_NAME, 9)
+                    c.setFont(KOREAN_FONT_NAME, 11)
                     c.drawCentredString(
                         x + cell_w / 2,
                         y + cell_h / 2 - 4,
                         seat["name"],
                     )
                 else:
-                    c.setFont(KOREAN_FONT_NAME, 8)
+                    c.setFont(KOREAN_FONT_NAME, 10)
                     c.drawCentredString(
                         x + cell_w / 2,
                         y + cell_h / 2 - 4,
@@ -389,7 +464,7 @@ def draw_seating_page(c, seating_matrix, seating_mode, view_mode, bun_dan, title
 
     if view_mode == "teacher":
         # 교사용: 교탁이 아래쪽
-        desk_y = margin_y - desk_h - 5
+        desk_y = margin_y - desk_h - 10
     else:
         # 학생용: 교탁이 위쪽
         desk_y = height - margin_y + 5
@@ -397,7 +472,7 @@ def draw_seating_page(c, seating_matrix, seating_mode, view_mode, bun_dan, title
     c.setFillColor(HexColor("#eff6ff"))
     c.setStrokeColor(HexColor("#2563eb"))
     c.rect(desk_x, desk_y, desk_w, desk_h, fill=1, stroke=1)
-    c.setFont(KOREAN_FONT_NAME, 12)
+    c.setFont(KOREAN_FONT_NAME, 14)  # 교탁 글씨도 조금 크게
     c.setFillColor(HexColor("#2563eb"))
     c.drawCentredString(
         desk_x + desk_w / 2,
@@ -489,7 +564,6 @@ if st.button("🎉 좌석 배치표 생성", type="primary"):
             bun_dan=int(input_cols),
             mode=seating_mode,
         )
-        # 상태 저장
         st.session_state["seating_matrix"] = seating_matrix
         st.session_state["seating_mode"] = seating_mode
         st.session_state["input_cols"] = int(input_cols)
