@@ -18,13 +18,25 @@ from google.oauth2.service_account import Credentials
 # 0. 한글 폰트 등록 (MaruBuri)
 # =========================
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-FONT_PATH = os.path.join(BASE_DIR, "fonts", "MaruBuri-Regular.otf")
+
+# otf / ttf 둘 다 탐색 (있는 것 먼저 사용)
+FONT_CANDIDATES = [
+    os.path.join(BASE_DIR, "fonts", "MaruBuri-Regular.otf"),
+    os.path.join(BASE_DIR, "fonts", "MaruBuri-Regular.ttf"),
+]
+
+FONT_PATH = None
+for path in FONT_CANDIDATES:
+    if os.path.exists(path):
+        FONT_PATH = path
+        break
+
 KOREAN_FONT_NAME = "MaruBuri"
 
-if os.path.exists(FONT_PATH):
+if FONT_PATH:
     pdfmetrics.registerFont(TTFont(KOREAN_FONT_NAME, FONT_PATH))
 else:
-    print("⚠️ Korean font file not found:", FONT_PATH)
+    print("⚠️ Korean font file not found in fonts/MaruBuri-Regular.otf or .ttf")
 
 
 # =========================
@@ -32,40 +44,26 @@ else:
 # =========================
 def load_student_data():
     """
-    Google Sheets에서 학생 데이터를 불러옵니다.
-    .streamlit/secrets.toml 예시:
-
-    [gcp_service_account]
-    type = "service_account"
-    project_id = "..."
-    private_key_id = "..."
-    private_key = """-----BEGIN PRIVATE KEY-----\n...\n-----END PRIVATE KEY-----"""
-    client_email = "..."
-    client_id = "..."
-    auth_uri = "https://accounts.google.com/o/oauth2/auth"
-    token_uri = "https://oauth2.googleapis.com/token"
-    auth_provider_x509_cert_url = "https://www.googleapis.com/oauth2/v1/certs"
-    client_x509_cert_url = "..."
-
-    spreadsheet_id = "스프레드시트ID"
+    Streamlit secrets에 gcp_service_account, spreadsheet_id가 들어있다고 가정.
+    (설정은 Settings → Secrets에 넣어둔 상태)
     """
     try:
         sa_info = st.secrets["gcp_service_account"]
         spreadsheet_id = st.secrets["spreadsheet_id"]
     except Exception as e:
-        st.error("❌ Streamlit secrets에 gcp_service_account / spreadsheet_id가 설정되어 있는지 확인해 주세요.")
+        st.error("❌ Streamlit secrets에 'gcp_service_account'와 'spreadsheet_id'가 설정되어 있는지 확인해 주세요.")
         raise e
 
     scopes = ["https://www.googleapis.com/auth/spreadsheets.readonly"]
     creds = Credentials.from_service_account_info(sa_info, scopes=scopes)
     client = gspread.authorize(creds)
 
+    # 스프레드시트 열기
     sh = client.open_by_key(spreadsheet_id)
 
-    # 기본: 첫 번째 시트 사용
+    # 기본: 첫 번째 시트 사용 (원하면 worksheet 이름으로 변경 가능)
     ws = sh.sheet1
-    # 특정 시트명을 쓰고 싶다면:
-    # ws = sh.worksheet("1반")
+    # ws = sh.worksheet("1반")  # 특정 시트명을 쓰고 싶으면 주석 해제 후 이름 수정
 
     records = ws.get_all_records()
     if not records:
@@ -74,7 +72,7 @@ def load_student_data():
 
     df = pd.DataFrame(records)
 
-    # 컬럼 이름 매핑
+    # 컬럼 이름 자동 매핑
     col_num_candidates = ["Number", "번호", "NO", "No", "no", "Num"]
     col_name_candidates = ["Name", "이름"]
     col_gender_candidates = ["Gender", "성별", "gender", "sex", "Sex"]
@@ -113,6 +111,7 @@ def load_student_data():
 
     df = df[needed_cols]
 
+    # Number가 문자열이면 숫자로 변환 시도
     if "Number" in df.columns:
         df["Number"] = pd.to_numeric(df["Number"], errors="coerce").fillna(df["Number"])
 
@@ -124,7 +123,7 @@ STUDENTS_LIST = STUDENTS_DF.to_dict("records")
 
 
 # =========================
-# 2. 헬퍼: 학생 dict → 좌석 dict
+# 2. 헬퍼: 학생 dict → 좌석 dict (색 + 이름 변환)
 # =========================
 def student_to_seat(student: dict):
     if student is None:
@@ -180,8 +179,8 @@ def assign_seats(student_list, rows, bun_dan, mode):
             for _ in range(bun_dan):  # 각 분단은 2자리
                 if pair_idx < len(pairs):
                     s1, s2 = pairs[pair_idx]
-                    row_data.append(s1)
-                    row_data.append(s2)
+                    row_data.append(s1)  # 왼쪽
+                    row_data.append(s2)  # 오른쪽
                 else:
                     row_data.append(None)
                     row_data.append(None)
@@ -313,12 +312,10 @@ def render_chart(matrix, view_mode, bun_dan, seating_mode):
 
             extra_margin = ""
             if is_paired_mode:
-                if c_idx % 2 == 0:
-                    desk_class += " paired-desk-left"
-                else:
-                    desk_class += " paired-desk-right"
-                    if c_idx != len(row) - 1:
-                        extra_margin = "margin-right: 20px;"
+                # 모양 C: 각각 독립 책상, 다만 짝(2개) 단위로 분단 간격만 추가
+                if c_idx % 2 == 1 and c_idx != len(row) - 1:
+                    # 짝의 오른쪽 책상 뒤에 분단 간격
+                    extra_margin = "margin-right: 20px;"
 
             if desk:
                 desk_style = f"background-color: {desk['color']}; border-color: {desk['color']};"
@@ -336,55 +333,53 @@ def render_chart(matrix, view_mode, bun_dan, seating_mode):
 
 
 # =========================
-# 5. PDF 그리기 (책상 작게 / 간격 넓게 / 폰트 크게)
+# 5. PDF 그리기 (모양 C, 폰트 +2, 간격 넓게)
 # =========================
 def draw_seating_page(c, seating_matrix, seating_mode, view_mode, bun_dan, title_text):
     width, height = landscape(A4)
 
-    # 제목 폰트 조금 크게
-    c.setFont(KOREAN_FONT_NAME, 22)
-    c.drawCentredString(width / 2, height - 45, title_text)
+    # 제목 폰트 크게
+    c.setFont(KOREAN_FONT_NAME, 24)
+    c.drawCentredString(width / 2, height - 50, title_text)
 
     rows = len(seating_matrix)
     cols = len(seating_matrix[0]) if rows > 0 else 0
 
-    # 교사용: 앞줄이 아래 → 행 순서 뒤집어서 그림
+    # 교사용: 앞줄이 아래 → 행 역순
     # 학생용: 앞줄이 위 → 그대로
     matrix = seating_matrix[::-1] if view_mode == "teacher" else seating_matrix
 
     margin_x = 50
-    margin_y = 85   # 살짝 넉넉한 여백
+    margin_y = 90
 
-    # 💡 책상 크기는 작게, 간격은 넓게
-    seat_gap_x = 15   # 가로 간격 크게
-    seat_gap_y = 18   # 세로 간격 크게
+    # 책상 크기 작게, 간격 넓게
+    seat_gap_x = 15   # 가로 여백
+    seat_gap_y = 20   # 세로 여백
 
-    # 사용 가능한 높이 (제목/교탁 공간 제외)
+    # 세로 방향 크기 계산
     available_height = height - margin_y * 2 - 70
     if rows > 0:
         cell_h = (available_height - seat_gap_y * (rows - 1)) / rows
     else:
-        cell_h = 35  # 기본값 조금 작게
+        cell_h = 35
 
-    if seating_mode == "Paired":
-        seat_cols = bun_dan * 2
-        pair_gap = 18  # 분단 사이 간격도 넓게
-        if seat_cols > 0:
-            total_pair_gaps = (bun_dan - 1) * pair_gap
-            total_seat_gaps = (seat_cols - 1) * seat_gap_x
+    # 가로 방향 크기 계산
+    if cols > 0:
+        if seating_mode == "Paired":
+            # 모양 C: 전체 열 수 = cols, 분단 수 = bun_dan = cols/2
+            pairs = cols // 2
+            pair_gap = 20  # 분단 간 간격
+            total_pair_gaps = max(0, pairs - 1) * pair_gap
+            total_seat_gaps = (cols - 1) * seat_gap_x
             available_width = width - margin_x * 2 - total_pair_gaps - total_seat_gaps
-            cell_w = available_width / seat_cols
+            cell_w = available_width / cols
         else:
-            cell_w = 35
-    else:
-        seat_cols = cols
-        pair_gap = 0
-        if seat_cols > 0:
-            total_seat_gaps = (seat_cols - 1) * seat_gap_x
+            # Single: 일반적인 grid
+            total_seat_gaps = (cols - 1) * seat_gap_x
             available_width = width - margin_x * 2 - total_seat_gaps
-            cell_w = available_width / seat_cols
-        else:
-            cell_w = 35
+            cell_w = available_width / cols
+    else:
+        cell_w = 35
 
     start_y = height - margin_y - cell_h
 
@@ -394,38 +389,97 @@ def draw_seating_page(c, seating_matrix, seating_mode, view_mode, bun_dan, title
         x = margin_x
 
         if seating_mode == "Paired":
+            # 각 행에서 짝(2칸)을 기준으로 분단 간격 추가
             for c_idx, seat in enumerate(row):
+                # 앞 자리가 아니면 기본 가로 간격 추가
                 if c_idx > 0:
                     x += seat_gap_x
-                if c_idx > 0 and c_idx % 2 == 0:
-                    x += pair_gap
+                # 짝의 오른쪽 자리 뒤에는 분단 간격 추가
+                if c_idx % 2 == 0:
+                    pass
+                else:
+                    # 오른쪽 자리 이후 + 분단 간 여백 (마지막 짝 제외)
+                    pair_index = c_idx // 2
+                    if pair_index < (cols // 2) - 1:
+                        # 여분 여백은 다음 반복에서 seat_gap_x와 함께 적용되므로,
+                        # 여기서 pair_gap을 미리 더해준다
+                        pass
 
-                if seat:
-                    c.setFillColor(HexColor(seat["color"]))
-                    c.setStrokeColor(HexColor(seat["color"]))
+                # 실제 좌표 계산에서 pair_gap 반영
+                # (pair_index 기반으로 누적해서 계산하는 구조보다 단순하게 구현)
+                # → 위에서 pair_gap을 바로 더하지 않고,
+                #   아래에서 짝의 오른쪽일 때 직접 더해주자.
+                # 다시 좌표를 재조정
+                # (간단화를 위해 이 부분을 다시 작성)
+            # 위 loop를 다시 명확하게 작성
+            x = margin_x
+            c_idx = 0
+            while c_idx < cols:
+                # 왼쪽 책상
+                seat_left = row[c_idx]
+                # 오른쪽 책상(없을 수도 있음)
+                seat_right = row[c_idx + 1] if c_idx + 1 < cols else None
+
+                # 왼쪽 책상 그리기
+                if seat_left:
+                    c.setFillColor(HexColor(seat_left["color"]))
+                    c.setStrokeColor(HexColor(seat_left["color"]))
                 else:
                     c.setFillColor(HexColor("#e0e7ff"))
                     c.setStrokeColor(HexColor("#d1d5db"))
 
                 c.rect(x, y, cell_w, cell_h, fill=1, stroke=1)
-
                 c.setFillColor(black)
-                if seat:
-                    # 💡 폰트 조금 더 크게
-                    c.setFont(KOREAN_FONT_NAME, 11)
+                if seat_left:
+                    c.setFont(KOREAN_FONT_NAME, 13)
                     c.drawCentredString(
                         x + cell_w / 2,
                         y + cell_h / 2 - 4,
-                        seat["name"],
+                        seat_left["name"],
                     )
                 else:
-                    c.setFont(KOREAN_FONT_NAME, 10)
+                    c.setFont(KOREAN_FONT_NAME, 12)
                     c.drawCentredString(
                         x + cell_w / 2,
                         y + cell_h / 2 - 4,
                         "빈 자리",
                     )
+
+                # 오른쪽 책상 위치
+                x_right = x + cell_w + seat_gap_x
+
+                if seat_right is not None:
+                    if seat_right:
+                        c.setFillColor(HexColor(seat_right["color"]))
+                        c.setStrokeColor(HexColor(seat_right["color"]))
+                    else:
+                        c.setFillColor(HexColor("#e0e7ff"))
+                        c.setStrokeColor(HexColor("#d1d5db"))
+
+                    c.rect(x_right, y, cell_w, cell_h, fill=1, stroke=1)
+                    c.setFillColor(black)
+                    if seat_right:
+                        c.setFont(KOREAN_FONT_NAME, 13)
+                        c.drawCentredString(
+                            x_right + cell_w / 2,
+                            y + cell_h / 2 - 4,
+                            seat_right["name"],
+                        )
+                    else:
+                        c.setFont(KOREAN_FONT_NAME, 12)
+                        c.drawCentredString(
+                            x_right + cell_w / 2,
+                            y + cell_h / 2 - 4,
+                            "빈 자리",
+                        )
+
+                # 다음 짝의 시작 x:
+                # 오른쪽 책상 기준 + cell_w + 분단 간격
+                x = x_right + cell_w + 20  # 20 = 분단 간격
+                c_idx += 2
+
         else:
+            # Single 모드: 일반적인 그리드
             for c_idx, seat in enumerate(row):
                 if c_idx > 0:
                     x += seat_gap_x
@@ -441,14 +495,14 @@ def draw_seating_page(c, seating_matrix, seating_mode, view_mode, bun_dan, title
 
                 c.setFillColor(black)
                 if seat:
-                    c.setFont(KOREAN_FONT_NAME, 11)
+                    c.setFont(KOREAN_FONT_NAME, 13)
                     c.drawCentredString(
                         x + cell_w / 2,
                         y + cell_h / 2 - 4,
                         seat["name"],
                     )
                 else:
-                    c.setFont(KOREAN_FONT_NAME, 10)
+                    c.setFont(KOREAN_FONT_NAME, 12)
                     c.drawCentredString(
                         x + cell_w / 2,
                         y + cell_h / 2 - 4,
@@ -458,8 +512,8 @@ def draw_seating_page(c, seating_matrix, seating_mode, view_mode, bun_dan, title
                 x += cell_w
 
     # 교탁 위치
-    desk_w = 100
-    desk_h = 40
+    desk_w = 110
+    desk_h = 45
     desk_x = width / 2 - desk_w / 2
 
     if view_mode == "teacher":
@@ -472,7 +526,7 @@ def draw_seating_page(c, seating_matrix, seating_mode, view_mode, bun_dan, title
     c.setFillColor(HexColor("#eff6ff"))
     c.setStrokeColor(HexColor("#2563eb"))
     c.rect(desk_x, desk_y, desk_w, desk_h, fill=1, stroke=1)
-    c.setFont(KOREAN_FONT_NAME, 14)  # 교탁 글씨도 조금 크게
+    c.setFont(KOREAN_FONT_NAME, 16)
     c.setFillColor(HexColor("#2563eb"))
     c.drawCentredString(
         desk_x + desk_w / 2,
@@ -514,7 +568,7 @@ st.set_page_config(layout="centered", page_title="랜덤 좌석배치표 생성�
 st.markdown(HTML_STYLE, unsafe_allow_html=True)
 
 st.title("🧑‍🏫 중학교 랜덤 좌석 배치표 생성기")
-st.write("행/분단 수와 좌석 형태를 입력하면 무작위 좌석 배치표를 만들고, PDF로 저장할 수 있어요.")
+st.write("구글 시트의 학생 데이터를 불러와 행/분단 수를 지정하면, 무작위 좌석 배치표를 만들고 PDF로 저장할 수 있어요.")
 
 col1, col2 = st.columns(2)
 
