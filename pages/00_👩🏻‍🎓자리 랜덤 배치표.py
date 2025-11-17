@@ -14,12 +14,10 @@ from reportlab.pdfbase import pdfmetrics
 from reportlab.pdfbase.ttfonts import TTFont
 
 
-
 # =========================================================
-# 0. 스프레드시트 ID (여기만 바꾸면 끝!)
+# 0. 스프레드시트 ID (여기만 바꾸면 됨)
 # =========================================================
 SPREADSHEET_ID = "15c7dqXD7OE87InzW8SMUiSa50mEfp1WNyegTpPWZCMo"
-
 
 
 # =========================================================
@@ -49,7 +47,6 @@ else:
     KOREAN_FONT = "Helvetica"
 
 
-
 # =========================================================
 # 2. 샘플 데이터 (시트 실패 시)
 # =========================================================
@@ -72,21 +69,20 @@ def create_sample_students_df():
     return pd.DataFrame(data)
 
 
-
 # =========================================================
 # 3. Google Sheets → 데이터 불러오기
 # =========================================================
 def load_student_data():
     try:
         service_info = st.secrets["gcp_service_account"]
-    except:
-        st.error("❌ secrets에 gcp_service_account가 없습니다.")
+    except Exception:
+        st.error("❌ secrets에 [gcp_service_account]가 없습니다.")
         return create_sample_students_df()
 
     try:
         creds = Credentials.from_service_account_info(
             service_info,
-            scopes=["https://www.googleapis.com/auth/spreadsheets.readonly"]
+            scopes=["https://www.googleapis.com/auth/spreadsheets.readonly"],
         )
         client = gspread.authorize(creds)
 
@@ -100,64 +96,75 @@ def load_student_data():
 
         df = pd.DataFrame(records)
 
-        # 컬럼 자동 인식
-        col_num = None
-        col_name = None
-        col_gender = None
+        # 필수 컬럼이 있는지 확인 (출석 번호 / 이름 / 성별 or 변형)
+        cols = df.columns
+        has_num = any(c in cols for c in ["출석 번호", "번호", "Number", "NO", "No"])
+        has_name = any(c in cols for c in ["이름", "Name", "학생명", "성명"])
+        has_gender = any(c in cols for c in ["성별", "Gender", "gender", "sex", "Sex"])
 
-        for c in df.columns:
-            if c in ["출석 번호", "번호", "No", "NO"]:
-                col_num = c
-            if c in ["이름", "Name"]:
-                col_name = c
-            if c in ["성별", "Gender", "gender", "sex"]:
-                col_gender = c
-
-        if col_num and col_num != "Number":
-            df = df.rename(columns={col_num: "Number"})
-        if col_name and col_name != "Name":
-            df = df.rename(columns={col_name: "Name"})
-        if col_gender and col_gender != "Gender":
-            df = df.rename(columns={col_gender: "Gender"})
+        if not (has_num and has_name and has_gender):
+            st.error("❌ '출석 번호/번호', '이름', '성별' 컬럼을 찾지 못했습니다.")
+            return create_sample_students_df()
 
         return df
 
     except Exception as e:
-        st.error(f"❌ 시트 불러오기 오류: {e}")
+        st.error(f"❌ Google Sheets 오류: {e}")
         return create_sample_students_df()
-
 
 
 STUDENTS_DF = load_student_data()
 STUDENTS_LIST = STUDENTS_DF.to_dict("records")
 
 
-
 # =========================================================
 # 4. 학생 dict → 좌석 표시용 dict 변환
 # =========================================================
-def student_to_seat(student):
+def student_to_seat(student: dict):
     if student is None:
         return None
 
-    # 성별 색상
-    gender = str(student.get("Gender", "")).strip()
-    if gender in ["F", "여", "여자"]:
-        color = "#F5B7B1"
-    elif gender in ["M", "남", "남자"]:
-        color = "#A9CCE3"
+    # --- 성별 인식 (여러 케이스)
+    gender = (
+        student.get("Gender")
+        or student.get("성별")
+        or student.get("gender")
+        or student.get("Sex")
+        or ""
+    )
+    gender = str(gender).strip()
+
+    if gender in ["F", "여", "여자", "f", "female", "FEMALE"]:
+        color = "#F5B7B1"  # 여
+    elif gender in ["M", "남", "남자", "m", "male", "MALE"]:
+        color = "#A9CCE3"  # 남
     else:
         color = "#e5e7eb"
 
-    # 번호 + 이름
-    number = student.get("Number", "")
-    name = student.get("Name", "")
+    # --- 번호 인식
+    number = (
+        student.get("Number")
+        or student.get("출석 번호")
+        or student.get("번호")
+        or student.get("NO")
+        or student.get("No")
+        or ""
+    )
 
-    return {
-        "name": f"{number} {name}".strip(),
-        "color": color
-    }
+    # --- 이름 인식
+    name = (
+        student.get("Name")
+        or student.get("이름")
+        or student.get("학생명")
+        or student.get("성명")
+        or ""
+    )
 
+    num_str = str(number).strip()
+    name_str = str(name).strip()
+
+    label = f"{num_str} {name_str}".strip()
+    return {"name": label, "color": color}
 
 
 # =========================================================
@@ -167,17 +174,17 @@ def assign_seats(student_list, rows, bun_dan, mode):
     students = student_list[:]
     random.shuffle(students)
 
-    # 짝은 2자리 = 1분단당 2컬럼
     if mode == "Paired":
-        cols = bun_dan * 2
+        cols = bun_dan * 2  # 한 모둠에 2자리
     else:
         cols = bun_dan
 
     total_seats = rows * cols
+    # 실제 들어갈 학생 수
     students = students[:total_seats]
 
-    # 두 명씩 묶기
     if mode == "Paired":
+        # 두 명씩 묶어서 짝 생성
         pairs = []
         for i in range(0, len(students), 2):
             s1 = student_to_seat(students[i])
@@ -190,8 +197,9 @@ def assign_seats(student_list, rows, bun_dan, mode):
             row = []
             for _ in range(bun_dan):
                 if idx < len(pairs):
-                    row.append(pairs[idx][0])
-                    row.append(pairs[idx][1])
+                    s1, s2 = pairs[idx]
+                    row.append(s1)
+                    row.append(s2)
                 else:
                     row.append(None)
                     row.append(None)
@@ -199,7 +207,6 @@ def assign_seats(student_list, rows, bun_dan, mode):
             seat_matrix.append(row)
         return seat_matrix
 
-    # 혼자 앉기
     else:
         seat_matrix = []
         idx = 0
@@ -215,9 +222,8 @@ def assign_seats(student_list, rows, bun_dan, mode):
         return seat_matrix
 
 
-
 # =========================================================
-# 6. HTML 렌더링 (화면)
+# 6. HTML 렌더링 (화면용)
 # =========================================================
 HTML_STYLE = """
 <style>
@@ -263,45 +269,44 @@ HTML_STYLE = """
 
 def render_chart(matrix, view_mode, bun_dan, seating_mode):
     if view_mode == "teacher":
-        matrix = matrix[::-1]  # 교탁 기준 반전
+        # 교탁에 서서 볼 때: 앞줄이 아래쪽에 오도록 뒤집어서 보여줌
+        matrix = matrix[::-1]
 
     cols = len(matrix[0])
     extra_pairs = (cols // 2 - 1) if seating_mode == "Paired" else 0
+    grid_cols = cols + max(0, extra_pairs)
 
-    grid_cols = cols + extra_pairs
     html = f'<div class="desk-grid" style="grid-template-columns: repeat({grid_cols}, auto);">'
 
     for row in matrix:
         for i, desk in enumerate(row):
-            desk_style = ""
             classes = "desk"
-
             if desk:
-                desk_style = f"background-color:{desk['color']};border-color:{desk['color']}"
+                style = f"background-color:{desk['color']};border-color:{desk['color']};"
                 name = desk["name"]
             else:
                 classes += " empty-desk"
+                style = ""
                 name = "빈 자리"
 
-            html += f'<div class="{classes}" style="{desk_style}">{name}</div>'
+            html += f'<div class="{classes}" style="{style}">{name}</div>'
 
-            # 짝 책상 간 간격
-            if seating_mode == "Paired" and i % 2 == 1 and i != len(row)-1:
+            # 짝 책상 사이 간격(모둠 간격)
+            if seating_mode == "Paired" and i % 2 == 1 and i != len(row) - 1:
                 html += '<div style="width:20px;"></div>'
 
     html += "</div>"
     return html
 
 
-
 # =========================================================
-# 7. PDF 그리기
+# 7. PDF 생성
 # =========================================================
 def draw_pdf_page(c, matrix, seating_mode, view_mode, bun_dan, title):
     width, height = landscape(A4)
 
     c.setFont(KOREAN_FONT, 26)
-    c.drawCentredString(width/2, height - 40, title)
+    c.drawCentredString(width / 2, height - 40, title)
 
     if view_mode == "teacher":
         matrix = matrix[::-1]
@@ -315,10 +320,10 @@ def draw_pdf_page(c, matrix, seating_mode, view_mode, bun_dan, title):
     gap_y = 18
     pair_gap = 22 if seating_mode == "Paired" else 10
 
-    available_h = height - margin_y*2 - 80
-    cell_h = (available_h - gap_y*(rows-1)) / rows
+    available_h = height - margin_y * 2 - 80
+    cell_h = (available_h - gap_y * (rows - 1)) / rows
 
-    available_w = width - margin_x*2 - (cols-1)*gap_x - (bun_dan-1)*pair_gap
+    available_w = width - margin_x * 2 - (cols - 1) * gap_x - (bun_dan - 1) * pair_gap
     cell_w = available_w / cols
 
     start_y = height - margin_y - cell_h
@@ -337,42 +342,44 @@ def draw_pdf_page(c, matrix, seating_mode, view_mode, bun_dan, title):
 
             c.rect(x, y, cell_w, cell_h, fill=1, stroke=1)
 
+            c.setFillColor(black)
             if desk:
-                c.setFillColor(black)
-                c.setFont(KOREAN_FONT, 16)
-                c.drawCentredString(x + cell_w/2, y + cell_h/2 - 5, desk["name"])
+                c.setFont(KOREAN_FONT, 16)  # 화면보다 2pt 정도 크게
+                c.drawCentredString(x + cell_w / 2, y + cell_h / 2 - 5, desk["name"])
             else:
                 c.setFont(KOREAN_FONT, 14)
-                c.drawCentredString(x + cell_w/2, y + cell_h/2 - 5, "빈 자리")
+                c.drawCentredString(x + cell_w / 2, y + cell_h / 2 - 5, "빈 자리")
 
             x += cell_w + gap_x
 
-            if seating_mode == "Paired" and c_idx % 2 == 1 and c_idx != cols-1:
+            if seating_mode == "Paired" and c_idx % 2 == 1 and c_idx != cols - 1:
                 x += pair_gap
 
-    # 교탁 위치
+    # 교탁
     desk_w = 130
     desk_h = 48
-    desk_x = width/2 - desk_w/2
-    desk_y = margin_y - desk_h if view_mode == "teacher" else height-margin_y+10
+    if view_mode == "teacher":
+        desk_y = margin_y - desk_h
+    else:
+        desk_y = height - margin_y + 10
+    desk_x = width / 2 - desk_w / 2
 
     c.setFillColor(HexColor("#eff6ff"))
     c.setStrokeColor(HexColor("#2563eb"))
     c.rect(desk_x, desk_y, desk_w, desk_h, fill=1, stroke=1)
     c.setFont(KOREAN_FONT, 18)
     c.setFillColor(HexColor("#2563eb"))
-    c.drawCentredString(desk_x + desk_w/2, desk_y + desk_h/2 - 4, "교탁")
+    c.drawCentredString(desk_x + desk_w / 2, desk_y + desk_h / 2 - 4, "교탁")
 
 
-
-def make_pdf(matrix, seating_mode, view, bun_dan, title):
+def make_pdf(matrix, seating_mode, view_mode, bun_dan, title):
     buf = io.BytesIO()
     c = canvas.Canvas(buf, pagesize=landscape(A4))
-    draw_pdf_page(c, matrix, seating_mode, view, bun_dan, title)
+    draw_pdf_page(c, matrix, seating_mode, view_mode, bun_dan, title)
     c.showPage()
     c.save()
+    buf.seek(0)
     return buf.getvalue()
-
 
 
 def make_pdf_both(matrix, seating_mode, bun_dan):
@@ -382,45 +389,54 @@ def make_pdf_both(matrix, seating_mode, bun_dan):
     draw_pdf_page(c, matrix, seating_mode, "teacher", bun_dan, "교사용 좌석 배치표")
     c.showPage()
 
-    draw_pdf_page(c, matrix, seating_mode, "student", bun_dан, "학생용 좌석 배치표")
+    draw_pdf_page(c, matrix, seating_mode, "student", bun_dan, "학생용 좌석 배치표")
     c.showPage()
 
     c.save()
+    buf.seek(0)
     return buf.getvalue()
-
 
 
 # =========================================================
 # 8. Streamlit UI
 # =========================================================
 st.markdown(HTML_STYLE, unsafe_allow_html=True)
-st.title("🧑‍🏫 좌석 배치표 (Google Sheets 연동)")
+st.title("🧑‍🏫 자리 랜덤 배치표 (Google Sheets 연동)")
 
 with st.expander("불러온 학생 명단 확인"):
     st.dataframe(STUDENTS_DF)
 
-
-
 col1, col2 = st.columns(2)
 with col1:
-    seating_mode = st.radio("좌석 형태 선택", ["Single", "Paired"],
-                            format_func=lambda x: "혼자 앉기" if x=="Single" else "짝으로 앉기")
-
+    seating_mode = st.radio(
+        "좌석 형태 선택",
+        ["Single", "Paired"],
+        format_func=lambda x: "혼자 앉기" if x == "Single" else "짝으로 앉기",
+    )
 with col2:
-    bun_dan = st.number_input("분단 수", min_value=2, max_value=10, value=4)
-    rows = st.number_input("줄 수(행)", min_value=2, max_value=10, value=5)
-
+    bun_dan = st.number_input("분단 수", min_value=2, max_value=10, value=5 if seating_mode == "Paired" else 4)
+    rows = st.number_input("줄 수(행)", min_value=2, max_value=10, value=6)
 
 
 if st.button("🎉 좌석 배치 생성", type="primary"):
-    matrix = assign_seats(STUDENTS_LIST, int(rows), int(bun_dan), seating_mode)
+    # 좌석 수 체크
+    if seating_mode == "Paired":
+        seats_per_row = int(bun_dan) * 2
+    else:
+        seats_per_row = int(bun_dan)
 
-    st.session_state["matrix"] = matrix
-    st.session_state["bun_dan"] = int(bun_dan)
-    st.session_state["mode"] = seating_mode
+    total_seats = int(rows) * seats_per_row
+    num_students = len(STUDENTS_LIST)
 
-    st.success("좌석 배치가 성공적으로 생성되었습니다!")
-
+    if total_seats < num_students:
+        st.error("⚠️ 좌석이 부족해요!")
+        st.warning(f"학생 {num_students}명 / 자리 {total_seats}석")
+    else:
+        matrix = assign_seats(STUDENTS_LIST, int(rows), int(bun_dan), seating_mode)
+        st.session_state["matrix"] = matrix
+        st.session_state["bun_dan"] = int(bun_dan)
+        st.session_state["mode"] = seating_mode
+        st.success("좌석 배치가 성공적으로 생성되었습니다!")
 
 
 if "matrix" in st.session_state:
@@ -429,27 +445,28 @@ if "matrix" in st.session_state:
     seating_mode = st.session_state["mode"]
 
     st.markdown("---")
-    st.header("1️⃣ 교사 시야 (교탁 입장)")
-
+    st.header("1️⃣ 교사 시야 (교탁 입장 기준)")
     st.markdown(
         render_chart(matrix, "teacher", bun_dan, seating_mode),
-        unsafe_allow_html=True
+        unsafe_allow_html=True,
     )
-    st.markdown('<div style="text-align:center;"><span class="front-of-class">교탁</span></div>', unsafe_allow_html=True)
+    st.markdown(
+        '<div style="text-align:center;"><span class="front-of-class">교탁</span></div>',
+        unsafe_allow_html=True,
+    )
 
     st.markdown("---")
-    st.header("2️⃣ 학생 시야 (배포용)")
-
-    st.markdown('<div style="text-align:center;"><span class="front-of-class">교탁</span></div>', unsafe_allow_html=True)
+    st.header("2️⃣ 학생 시야 (학생용 안내)")
+    st.markdown(
+        '<div style="text-align:center;"><span class="front-of-class">교탁</span></div>',
+        unsafe_allow_html=True,
+    )
     st.markdown(
         render_chart(matrix, "student", bun_dan, seating_mode),
-        unsafe_allow_html=True
+        unsafe_allow_html=True,
     )
 
-
-    # =======================
-    # PDF 다운로드 섹션
-    # =======================
+    # PDF 다운로드
     teacher_pdf = make_pdf(matrix, seating_mode, "teacher", bun_dan, "교사용 좌석 배치표")
     student_pdf = make_pdf(matrix, seating_mode, "student", bun_dan, "학생용 좌석 배치표")
     both_pdf = make_pdf_both(matrix, seating_mode, bun_dan)
@@ -459,27 +476,45 @@ if "matrix" in st.session_state:
 
     d1, d2, d3 = st.columns(3)
     with d1:
-        st.download_button("📥 교사용 PDF", teacher_pdf, "teacher.pdf", "application/pdf")
+        st.download_button(
+            "📥 교사용 PDF",
+            teacher_pdf,
+            file_name="seating_teacher.pdf",
+            mime="application/pdf",
+        )
     with d2:
-        st.download_button("📥 학생용 PDF", student_pdf, "student.pdf", "application/pdf")
+        st.download_button(
+            "📥 학생용 PDF",
+            student_pdf,
+            file_name="seating_student.pdf",
+            mime="application/pdf",
+        )
     with d3:
-        st.download_button("📥 교사+학생 한 번에", both_pdf, "both.pdf", "application/pdf")
+        st.download_button(
+            "📥 교사+학생 한 번에",
+            both_pdf,
+            file_name="seating_both.pdf",
+            mime="application/pdf",
+        )
 
-
-
-# =========================================================
-# 9. 범례
-# =========================================================
+# 범례
 st.markdown("---")
 st.subheader("🌈 성별 색상 안내")
+cA, cB, cC = st.columns(3)
+with cA:
+    st.markdown(
+        '<div class="desk" style="background:#F5B7B1;border-color:#F5B7B1;">여학생</div>',
+        unsafe_allow_html=True,
+    )
+with cB:
+    st.markdown(
+        '<div class="desk" style="background:#A9CCE3;border-color:#A9CCE3;">남학생</div>',
+        unsafe_allow_html=True,
+    )
+with cC:
+    st.markdown(
+        '<div class="desk empty-desk">빈 자리</div>',
+        unsafe_allow_html=True,
+    )
 
-colA, colB, colC = st.columns(3)
-
-with colA:
-    st.markdown('<div class="desk" style="background:#F5B7B1;border-color:#F5B7B1;">여학생</div>', unsafe_allow_html=True)
-with colB:
-    st.markdown('<div class="desk" style="background:#A9CCE3;border-color:#A9CCE3;">남학생</div>', unsafe_allow_html=True)
-with colC:
-    st.markdown('<div class="desk empty-desk">빈 자리</div>', unsafe_allow_html=True)
-
-st.caption("이름은 ‘번호 이름’ 형식으로 표시됩니다.")
+st.caption("이름은 ‘번호 이름’ 형식으로 표시됩니다. (예: 3 김미연)")
