@@ -15,7 +15,7 @@ from reportlab.pdfbase.ttfonts import TTFont
 # 0. 한글 폰트 등록 (MaruBuri)
 # =========================
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-FONT_PATH = os.path.join(BASE_DIR, "fonts", "MaruBuri-Regular.ttf")
+FONT_PATH = os.path.join(BASE_DIR, "fonts", "MaruBuri-Regular.otf")
 KOREAN_FONT_NAME = "MaruBuri"
 
 if os.path.exists(FONT_PATH):
@@ -26,7 +26,7 @@ else:
 
 # =========================
 # 1. 학생 데이터 (샘플)
-#   → 나중에 구글 시트로 바꿔도 됨
+#    → 나중에 구글 시트로 바꿔도 됨
 # =========================
 def load_student_data():
     data = {
@@ -104,7 +104,7 @@ def assign_seats(student_list, rows, bun_dan, mode):
 
         seat_matrix = []
         pair_idx = 0
-        for r in range(rows):
+        for _ in range(rows):
             row_data = []
             for _ in range(bun_dan):  # 각 분단은 2자리
                 if pair_idx < len(pairs):
@@ -123,7 +123,7 @@ def assign_seats(student_list, rows, bun_dan, mode):
         seat_students = [student_to_seat(s) for s in students]
         seat_matrix = []
         idx = 0
-        for r in range(rows):
+        for _ in range(rows):
             row_data = []
             for _ in range(seats_per_row):
                 if idx < len(seat_students):
@@ -217,7 +217,7 @@ def render_chart(matrix, view_mode, bun_dan, seating_mode):
     """
     matrix: 2D list (원소: {'name','color'} or None)
     view_mode: 'teacher' / 'student'
-    bun_dan: 분단 수
+    bun_dan: 분단 수 (HTML에서는 cols는 row 길이로 계산)
     seating_mode: 'Single' / 'Paired'
     """
     rows = len(matrix)
@@ -263,11 +263,11 @@ def render_chart(matrix, view_mode, bun_dan, seating_mode):
 
 
 # =========================
-# 5. PDF 생성 (MaruBuri 한글 폰트 사용)
+# 5. PDF 생성 (각 자리 간격 넉넉히)
 # =========================
 def generate_pdf(seating_matrix, seating_mode, view_mode, bun_dan, title_text="좌석 배치표"):
     """
-    seating_matrix: 2D list
+    seating_matrix: 2D list (각 원소: {'name','color'} 또는 None)
     seating_mode: 'Single' / 'Paired'
     view_mode: 'teacher' / 'student'
     bun_dan: 분단 수 (짝 모드일 때 분단 간 간격 계산용)
@@ -276,43 +276,69 @@ def generate_pdf(seating_matrix, seating_mode, view_mode, bun_dan, title_text="�
     c = canvas.Canvas(buffer, pagesize=landscape(A4))
     width, height = landscape(A4)
 
-    # 제목
+    # ===== 제목 =====
     c.setFont(KOREAN_FONT_NAME, 18)
     c.drawCentredString(width / 2, height - 40, title_text)
 
     rows = len(seating_matrix)
     cols = len(seating_matrix[0]) if rows > 0 else 0
 
+    # 시야에 따라 행 순서 뒤집기
     matrix = seating_matrix if view_mode == "teacher" else seating_matrix[::-1]
 
+    # 여백
     margin_x = 50
-    margin_y = 70
+    margin_y = 80
 
+    # 좌석 사이 간격
+    seat_gap_x = 8   # 가로 간격
+    seat_gap_y = 10  # 세로 간격
+
+    # 사용 가능한 높이 계산 (윗/아랫 여백 + 교탁 공간)
     available_height = height - margin_y * 2 - 40
-    cell_h = available_height / rows if rows > 0 else 40
+    if rows > 0:
+        cell_h = (available_height - seat_gap_y * (rows - 1)) / rows
+    else:
+        cell_h = 40
 
+    # 가로 방향 폭/간격 계산
     if seating_mode == "Paired":
-        seat_cols = bun_dan * 2
-        gap_per_group = 0.3
-        base_width = (width - margin_x * 2) / (seat_cols + (bun_dan - 1) * gap_per_group)
-        cell_w = base_width
-        gap_w = base_width * gap_per_group
+        seat_cols = bun_dan * 2  # 실제 좌석 칸 수
+        pair_gap = 12            # 분단 사이 간격
+
+        if seat_cols > 0:
+            total_pair_gaps = (bun_dan - 1) * pair_gap
+            total_seat_gaps = (seat_cols - 1) * seat_gap_x
+            available_width = width - margin_x * 2 - total_pair_gaps - total_seat_gaps
+            cell_w = available_width / seat_cols
+        else:
+            cell_w = 40
     else:
         seat_cols = cols
-        gap_w = 0
-        cell_w = (width - margin_x * 2) / seat_cols if seat_cols > 0 else 40
+        pair_gap = 0
+        if seat_cols > 0:
+            total_seat_gaps = (seat_cols - 1) * seat_gap_x
+            available_width = width - margin_x * 2 - total_seat_gaps
+            cell_w = available_width / seat_cols
+        else:
+            cell_w = 40
 
+    # 좌석 시작 y (맨 윗줄)
     start_y = height - margin_y - cell_h
 
-    # 좌석 그리기
+    # ===== 좌석 그리기 =====
     for r, row in enumerate(matrix):
-        y = start_y - r * cell_h
+        y = start_y - r * (cell_h + seat_gap_y)
         x = margin_x
 
         if seating_mode == "Paired":
             for c_idx, seat in enumerate(row):
+                # 짝 사이 기본 간격
+                if c_idx > 0:
+                    x += seat_gap_x
+                # 새로운 짝(분단)이 시작될 때마다 pair_gap 추가
                 if c_idx > 0 and c_idx % 2 == 0:
-                    x += gap_w
+                    x += pair_gap
 
                 if seat:
                     c.setFillColor(HexColor(seat["color"]))
@@ -326,14 +352,25 @@ def generate_pdf(seating_matrix, seating_mode, view_mode, bun_dan, title_text="�
                 c.setFillColor(black)
                 if seat:
                     c.setFont(KOREAN_FONT_NAME, 9)
-                    c.drawCentredString(x + cell_w / 2, y + cell_h / 2 - 4, seat["name"])
+                    c.drawCentredString(
+                        x + cell_w / 2,
+                        y + cell_h / 2 - 4,
+                        seat["name"],
+                    )
                 else:
                     c.setFont(KOREAN_FONT_NAME, 8)
-                    c.drawCentredString(x + cell_w / 2, y + cell_h / 2 - 4, "빈 자리")
+                    c.drawCentredString(
+                        x + cell_w / 2,
+                        y + cell_h / 2 - 4,
+                        "빈 자리",
+                    )
 
-                x += cell_w
         else:
-            for seat in row:
+            # 혼자 앉기 모드
+            for c_idx, seat in enumerate(row):
+                if c_idx > 0:
+                    x += seat_gap_x
+
                 if seat:
                     c.setFillColor(HexColor(seat["color"]))
                     c.setStrokeColor(HexColor(seat["color"]))
@@ -346,29 +383,41 @@ def generate_pdf(seating_matrix, seating_mode, view_mode, bun_dan, title_text="�
                 c.setFillColor(black)
                 if seat:
                     c.setFont(KOREAN_FONT_NAME, 9)
-                    c.drawCentredString(x + cell_w / 2, y + cell_h / 2 - 4, seat["name"])
+                    c.drawCentredString(
+                        x + cell_w / 2,
+                        y + cell_h / 2 - 4,
+                        seat["name"],
+                    )
                 else:
                     c.setFont(KOREAN_FONT_NAME, 8)
-                    c.drawCentredString(x + cell_w / 2, y + cell_h / 2 - 4, "빈 자리")
+                    c.drawCentredString(
+                        x + cell_w / 2,
+                        y + cell_h / 2 - 4,
+                        "빈 자리",
+                    )
 
                 x += cell_w
 
-    # 교탁 (가운데)
+    # ===== 교탁 (가운데 배치) =====
     desk_w = 100
     desk_h = 40
     desk_x = width / 2 - desk_w / 2
 
     if view_mode == "teacher":
-        desk_y = height - margin_y + 5
+        desk_y = height - margin_y + 5   # 위쪽
     else:
-        desk_y = margin_y - desk_h - 5
+        desk_y = margin_y - desk_h - 5   # 아래쪽
 
     c.setFillColor(HexColor("#eff6ff"))
     c.setStrokeColor(HexColor("#2563eb"))
     c.rect(desk_x, desk_y, desk_w, desk_h, fill=1, stroke=1)
     c.setFont(KOREAN_FONT_NAME, 12)
     c.setFillColor(HexColor("#2563eb"))
-    c.drawCentredString(desk_x + desk_w / 2, desk_y + desk_h / 2 - 4, "교탁")
+    c.drawCentredString(
+        desk_x + desk_w / 2,
+        desk_y + desk_h / 2 - 4,
+        "교탁",
+    )
 
     c.showPage()
     c.save()
@@ -383,7 +432,7 @@ st.set_page_config(layout="centered", page_title="랜덤 좌석배치표 생성�
 st.markdown(HTML_STYLE, unsafe_allow_html=True)
 
 st.title("🧑‍🏫 중학교 랜덤 좌석 배치표 생성기")
-st.write("행/열(분단)과 좌석 형태를 입력하면 랜덤 좌석 배치표를 만들고, PDF로 저장할 수 있어요.")
+st.write("행/분단 수와 좌석 형태를 입력하면 무작위 좌석 배치표를 만들고, PDF로 저장할 수 있어요.")
 
 col1, col2 = st.columns(2)
 
@@ -397,7 +446,7 @@ with col1:
     )
 
 with col2:
-    st.subheader("2. 교실 크기 (행/분단 수)")
+    st.subheader("2. 교실 크기 (행 / 분단 수)")
     input_cols = st.number_input(
         "분단 수:",
         min_value=2,
@@ -435,9 +484,6 @@ if st.button("🎉 좌석 배치표 생성", type="primary"):
             bun_dan=int(input_cols),
             mode=seating_mode,
         )
-
-        # 실제 열 개수
-        display_cols = int(input_cols) * 2 if seating_mode == "Paired" else int(input_cols)
 
         st.markdown("---")
 
