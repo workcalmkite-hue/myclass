@@ -10,7 +10,6 @@ from reportlab.lib.colors import HexColor, black
 from reportlab.pdfbase import pdfmetrics
 from reportlab.pdfbase.ttfonts import TTFont
 
-
 # =========================
 # 0. 한글 폰트 등록 (MaruBuri)
 # =========================
@@ -26,7 +25,7 @@ else:
 
 # =========================
 # 1. 학생 데이터 (샘플)
-#    → 나중에 구글 시트로 바꿔도 됨
+#    → 나중에 구글 시트로 교체 가능
 # =========================
 def load_student_data():
     data = {
@@ -217,15 +216,19 @@ def render_chart(matrix, view_mode, bun_dan, seating_mode):
     """
     matrix: 2D list (원소: {'name','color'} or None)
     view_mode: 'teacher' / 'student'
-    bun_dan: 분단 수 (HTML에서는 cols는 row 길이로 계산)
+    bun_dan: 분단 수
     seating_mode: 'Single' / 'Paired'
     """
     rows = len(matrix)
     if rows == 0:
         return "<div>데이터 없음</div>"
 
+    # 열 수는 한 줄의 길이
     cols = len(matrix[0])
-    display_matrix = matrix if view_mode == "teacher" else matrix[::-1]
+
+    # 교사용: 교탁에서 볼 때 앞줄이 아래쪽에 보이도록 → 행 순서를 뒤집어 표시
+    # 학생용: 종이로 볼 때 앞줄이 위쪽에 보이도록 → 원래 순서 그대로
+    display_matrix = matrix[::-1] if view_mode == "teacher" else matrix
 
     grid_style = f"grid-template-columns: repeat({cols}, auto);"
     html_content = f'<div class="desk-grid" style="{grid_style}">'
@@ -243,7 +246,6 @@ def render_chart(matrix, view_mode, bun_dan, seating_mode):
                     desk_class += " paired-desk-left"
                 else:
                     desk_class += " paired-desk-right"
-                    # 짝의 오른쪽 자리이고, 마지막이 아니면 분단 사이 여백
                     if c_idx != len(row) - 1:
                         extra_margin = "margin-right: 20px;"
 
@@ -263,49 +265,36 @@ def render_chart(matrix, view_mode, bun_dan, seating_mode):
 
 
 # =========================
-# 5. PDF 생성 (각 자리 간격 넉넉히)
+# 5. PDF 그리기 공통 함수
 # =========================
-def generate_pdf(seating_matrix, seating_mode, view_mode, bun_dan, title_text="좌석 배치표"):
-    """
-    seating_matrix: 2D list (각 원소: {'name','color'} 또는 None)
-    seating_mode: 'Single' / 'Paired'
-    view_mode: 'teacher' / 'student'
-    bun_dan: 분단 수 (짝 모드일 때 분단 간 간격 계산용)
-    """
-    buffer = io.BytesIO()
-    c = canvas.Canvas(buffer, pagesize=landscape(A4))
+def draw_seating_page(c, seating_matrix, seating_mode, view_mode, bun_dan, title_text):
     width, height = landscape(A4)
 
-    # ===== 제목 =====
+    # 제목
     c.setFont(KOREAN_FONT_NAME, 18)
     c.drawCentredString(width / 2, height - 40, title_text)
 
     rows = len(seating_matrix)
     cols = len(seating_matrix[0]) if rows > 0 else 0
 
-    # 시야에 따라 행 순서 뒤집기
-    matrix = seating_matrix if view_mode == "teacher" else seating_matrix[::-1]
+    # 교사용: 교탁 기준에서 앞줄이 아래 → 행 순서를 뒤집어서 그림
+    # 학생용: 종이 기준에서 앞줄이 위 → 원본 순서대로
+    matrix = seating_matrix[::-1] if view_mode == "teacher" else seating_matrix
 
-    # 여백
     margin_x = 50
     margin_y = 80
-
-    # 좌석 사이 간격
     seat_gap_x = 8   # 가로 간격
     seat_gap_y = 10  # 세로 간격
 
-    # 사용 가능한 높이 계산 (윗/아랫 여백 + 교탁 공간)
     available_height = height - margin_y * 2 - 40
     if rows > 0:
         cell_h = (available_height - seat_gap_y * (rows - 1)) / rows
     else:
         cell_h = 40
 
-    # 가로 방향 폭/간격 계산
     if seating_mode == "Paired":
-        seat_cols = bun_dan * 2  # 실제 좌석 칸 수
-        pair_gap = 12            # 분단 사이 간격
-
+        seat_cols = bun_dan * 2
+        pair_gap = 12
         if seat_cols > 0:
             total_pair_gaps = (bun_dan - 1) * pair_gap
             total_seat_gaps = (seat_cols - 1) * seat_gap_x
@@ -323,20 +312,17 @@ def generate_pdf(seating_matrix, seating_mode, view_mode, bun_dan, title_text="�
         else:
             cell_w = 40
 
-    # 좌석 시작 y (맨 윗줄)
     start_y = height - margin_y - cell_h
 
-    # ===== 좌석 그리기 =====
+    # 좌석 그리기
     for r, row in enumerate(matrix):
         y = start_y - r * (cell_h + seat_gap_y)
         x = margin_x
 
         if seating_mode == "Paired":
             for c_idx, seat in enumerate(row):
-                # 짝 사이 기본 간격
                 if c_idx > 0:
                     x += seat_gap_x
-                # 새로운 짝(분단)이 시작될 때마다 pair_gap 추가
                 if c_idx > 0 and c_idx % 2 == 0:
                     x += pair_gap
 
@@ -364,9 +350,7 @@ def generate_pdf(seating_matrix, seating_mode, view_mode, bun_dan, title_text="�
                         y + cell_h / 2 - 4,
                         "빈 자리",
                     )
-
         else:
-            # 혼자 앉기 모드
             for c_idx, seat in enumerate(row):
                 if c_idx > 0:
                     x += seat_gap_x
@@ -398,15 +382,17 @@ def generate_pdf(seating_matrix, seating_mode, view_mode, bun_dan, title_text="�
 
                 x += cell_w
 
-    # ===== 교탁 (가운데 배치) =====
+    # 교탁 위치
     desk_w = 100
     desk_h = 40
     desk_x = width / 2 - desk_w / 2
 
     if view_mode == "teacher":
-        desk_y = height - margin_y + 5   # 위쪽
+        # 교사용: 교탁이 아래쪽
+        desk_y = margin_y - desk_h - 5
     else:
-        desk_y = margin_y - desk_h - 5   # 아래쪽
+        # 학생용: 교탁이 위쪽
+        desk_y = height - margin_y + 5
 
     c.setFillColor(HexColor("#eff6ff"))
     c.setStrokeColor(HexColor("#2563eb"))
@@ -419,7 +405,28 @@ def generate_pdf(seating_matrix, seating_mode, view_mode, bun_dan, title_text="�
         "교탁",
     )
 
+
+def generate_pdf(seating_matrix, seating_mode, view_mode, bun_dan, title_text="좌석 배치표"):
+    buffer = io.BytesIO()
+    c = canvas.Canvas(buffer, pagesize=landscape(A4))
+    draw_seating_page(c, seating_matrix, seating_mode, view_mode, bun_dan, title_text)
     c.showPage()
+    c.save()
+    buffer.seek(0)
+    return buffer.getvalue()
+
+
+def generate_both_pdf(seating_matrix, seating_mode, bun_dan):
+    buffer = io.BytesIO()
+    c = canvas.Canvas(buffer, pagesize=landscape(A4))
+
+    # 1페이지: 교사용
+    draw_seating_page(c, seating_matrix, seating_mode, "teacher", bun_dan, "교사용 좌석 배치표")
+    c.showPage()
+    # 2페이지: 학생용
+    draw_seating_page(c, seating_matrix, seating_mode, "student", bun_dan, "학생용 좌석 배치표")
+    c.showPage()
+
     c.save()
     buffer.seek(0)
     return buffer.getvalue()
@@ -462,8 +469,8 @@ with col2:
         step=1,
     )
 
+# ===== 좌석 생성 버튼 =====
 if st.button("🎉 좌석 배치표 생성", type="primary"):
-
     if seating_mode == "Paired":
         seats_per_row = int(input_cols) * 2
     else:
@@ -476,74 +483,96 @@ if st.button("🎉 좌석 배치표 생성", type="primary"):
         st.error("⚠️ 좌석이 부족합니다!")
         st.warning(f"학생 {num_students}명, 자리 {total_desks}석입니다. 줄/분단 수를 늘려주세요.")
     else:
-        st.success(f"총 {num_students}명을 {int(input_rows)}줄, {int(input_cols)}분단에 배치합니다.")
-
         seating_matrix = assign_seats(
             STUDENTS_LIST,
             rows=int(input_rows),
             bun_dan=int(input_cols),
             mode=seating_mode,
         )
+        # 상태 저장
+        st.session_state["seating_matrix"] = seating_matrix
+        st.session_state["seating_mode"] = seating_mode
+        st.session_state["input_cols"] = int(input_cols)
+        st.session_state["input_rows"] = int(input_rows)
+        st.success(f"총 {num_students}명을 {int(input_rows)}줄, {int(input_cols)}분단에 배치했습니다.")
 
-        st.markdown("---")
+# ===== 좌석 결과 + PDF 버튼 (session_state 기반) =====
+if "seating_matrix" in st.session_state:
+    seating_matrix = st.session_state["seating_matrix"]
+    seating_mode_saved = st.session_state["seating_mode"]
+    input_cols_saved = st.session_state["input_cols"]
+    input_rows_saved = st.session_state["input_rows"]
 
-        # 1) 교사 시야
-        st.header("1️⃣ 교사 시야 (교탁에서 아이들을 바라볼 때)")
-        st.markdown(
-            '<div style="text-align:center;"><div class="front-of-class">교탁 (Front of Class)</div></div>',
-            unsafe_allow_html=True,
+    st.markdown("---")
+    # 교사용: 교탁이 아래 / 앞줄이 아래
+    st.header("1️⃣ 교사 시야 (교탁에서 아이들을 바라볼 때)")
+    st.markdown(
+        render_chart(seating_matrix, "teacher", input_cols_saved, seating_mode_saved),
+        unsafe_allow_html=True,
+    )
+    st.markdown(
+        '<div style="text-align:center; margin-top: 15px;"><div class="front-of-class">교탁 (Front of Class)</div></div>',
+        unsafe_allow_html=True,
+    )
+
+    st.markdown("---")
+    # 학생용: 교탁이 위 / 앞줄이 위
+    st.header("2️⃣ 학생 시야 (학생들에게 나누어줄 때)")
+    st.markdown(
+        '<div style="text-align:center;"><div class="front-of-class">교탁 (Front of Class)</div></div>',
+        unsafe_allow_html=True,
+    )
+    st.markdown(
+        render_chart(seating_matrix, "student", input_cols_saved, seating_mode_saved),
+        unsafe_allow_html=True,
+    )
+
+    # PDF 생성
+    teacher_pdf_bytes = generate_pdf(
+        seating_matrix,
+        seating_mode_saved,
+        view_mode="teacher",
+        bun_dan=input_cols_saved,
+        title_text="교사용 좌석 배치표",
+    )
+    student_pdf_bytes = generate_pdf(
+        seating_matrix,
+        seating_mode_saved,
+        view_mode="student",
+        bun_dan=input_cols_saved,
+        title_text="학생용 좌석 배치표",
+    )
+    both_pdf_bytes = generate_both_pdf(
+        seating_matrix,
+        seating_mode_saved,
+        bun_dan=input_cols_saved,
+    )
+
+    st.markdown("---")
+    st.subheader("📄 PDF로 저장하기")
+
+    c1, c2, c3 = st.columns(3)
+    with c1:
+        st.download_button(
+            "📥 교사용 PDF 다운로드",
+            data=teacher_pdf_bytes,
+            file_name="seating_teacher.pdf",
+            mime="application/pdf",
         )
-        st.markdown(
-            render_chart(seating_matrix, "teacher", int(input_cols), seating_mode),
-            unsafe_allow_html=True,
+    with c2:
+        st.download_button(
+            "📥 학생용 PDF 다운로드",
+            data=student_pdf_bytes,
+            file_name="seating_student.pdf",
+            mime="application/pdf",
         )
-
-        st.markdown("---")
-
-        # 2) 학생 시야
-        st.header("2️⃣ 학생 시야 (학생들에게 나누어줄 때)")
-        st.markdown(
-            render_chart(seating_matrix, "student", int(input_cols), seating_mode),
-            unsafe_allow_html=True,
+    with c3:
+        st.download_button(
+            "📥 교사+학생용 PDF 한 번에",
+            data=both_pdf_bytes,
+            file_name="seating_both.pdf",
+            mime="application/pdf",
         )
-        st.markdown(
-            '<div style="text-align:center; margin-top: 15px;"><div class="front-of-class">교탁 (Front of Class)</div></div>',
-            unsafe_allow_html=True,
-        )
-
-        st.markdown("---")
-        st.subheader("📄 PDF로 저장하기")
-
-        teacher_pdf_bytes = generate_pdf(
-            seating_matrix,
-            seating_mode,
-            view_mode="teacher",
-            bun_dan=int(input_cols),
-            title_text="교사용 좌석 배치표",
-        )
-        student_pdf_bytes = generate_pdf(
-            seating_matrix,
-            seating_mode,
-            view_mode="student",
-            bun_dan=int(input_cols),
-            title_text="학생용 좌석 배치표",
-        )
-
-        c1, c2 = st.columns(2)
-        with c1:
-            st.download_button(
-                "📥 교사용 PDF 다운로드",
-                data=teacher_pdf_bytes,
-                file_name="seating_teacher.pdf",
-                mime="application/pdf",
-            )
-        with c2:
-            st.download_button(
-                "📥 학생용 PDF 다운로드 (아이들 나눠주기)",
-                data=student_pdf_bytes,
-                file_name="seating_student.pdf",
-                mime="application/pdf",
-            )
 
 # 범례
 st.markdown("---")
