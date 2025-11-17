@@ -340,12 +340,4 @@ with col_legend_p:
     
 st.caption("학생 이름은 '번호 이름' 형태로 표시됩니다. (예: 1 홍길동)")
 
-# --- 7. Google Sheets API 연동 안내 ---
-st.markdown("---")
-st.info("""
-**💡 Google Sheets API 연동 안내**
-현재는 샘플 데이터로 실행됩니다. 실제 구글 시트 데이터를 연동하려면 다음 라이브러리와 코드를 사용해야 합니다:
-1.  **requirements.txt**에 `gspread`, `oauth2client` 등을 추가합니다.
-2.  Google Cloud Platform에서 서비스 계정을 생성하고 키 파일(JSON)을 다운로드합니다.
-3.  `load_student_data` 함수 내부에서 `gspread`를 사용하여 시트에 연결하고 데이터를 읽어오는 코드를 작성합니다. 
-""")
+
