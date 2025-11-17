@@ -180,11 +180,9 @@ def assign_seats(student_list, rows, bun_dan, mode):
         cols = bun_dan
 
     total_seats = rows * cols
-    # 실제 들어갈 학생 수
     students = students[:total_seats]
 
     if mode == "Paired":
-        # 두 명씩 묶어서 짝 생성
         pairs = []
         for i in range(0, len(students), 2):
             s1 = student_to_seat(students[i])
@@ -269,7 +267,6 @@ HTML_STYLE = """
 
 def render_chart(matrix, view_mode, bun_dan, seating_mode):
     if view_mode == "teacher":
-        # 교탁에 서서 볼 때: 앞줄이 아래쪽에 오도록 뒤집어서 보여줌
         matrix = matrix[::-1]
 
     cols = len(matrix[0])
@@ -291,7 +288,6 @@ def render_chart(matrix, view_mode, bun_dan, seating_mode):
 
             html += f'<div class="{classes}" style="{style}">{name}</div>'
 
-            # 짝 책상 사이 간격(모둠 간격)
             if seating_mode == "Paired" and i % 2 == 1 and i != len(row) - 1:
                 html += '<div style="width:20px;"></div>'
 
@@ -300,37 +296,50 @@ def render_chart(matrix, view_mode, bun_dan, seating_mode):
 
 
 # =========================================================
-# 7. PDF 생성
+# 7. PDF 생성 (중앙 정렬 + 교탁 안 겹치게)
 # =========================================================
 def draw_pdf_page(c, matrix, seating_mode, view_mode, bun_dan, title):
     width, height = landscape(A4)
 
+    # 제목
     c.setFont(KOREAN_FONT, 26)
     c.drawCentredString(width / 2, height - 40, title)
 
+    # 교사용은 앞줄이 아래에 오도록 뒤집어서, 학생용은 그대로
     if view_mode == "teacher":
-        matrix = matrix[::-1]
+        matrix_to_draw = matrix[::-1]
+    else:
+        matrix_to_draw = matrix
 
-    rows = len(matrix)
-    cols = len(matrix[0])
+    rows = len(matrix_to_draw)
+    cols = len(matrix_to_draw[0])
 
-    margin_x = 40
-    margin_y = 70
+    margin_y = 80
     gap_x = 10
     gap_y = 18
-    pair_gap = 22 if seating_mode == "Paired" else 10
+    pair_gap = 22 if seating_mode == "Paired" else 0
 
+    # 1) 세로 방향: 위쪽에 제목 + 여백, 그 아래부터 책상
     available_h = height - margin_y * 2 - 80
-    cell_h = (available_h - gap_y * (rows - 1)) / rows
+    cell_h = (available_h - gap_y * (rows - 1)) / rows if rows > 0 else 40
+    start_y = height - margin_y - cell_h  # 첫 줄 y 위치
 
-    available_w = width - margin_x * 2 - (cols - 1) * gap_x - (bun_dan - 1) * pair_gap
-    cell_w = available_w / cols
+    # 2) 가로 방향: 전체 폭 계산 후 중앙 정렬
+    #   전체 책상 폭 = (cols * cell_w) + (cols-1)*gap_x + (bun_dan-1)*pair_gap
+    #   이 식을 width에 딱 맞춰 cell_w를 계산
+    total_base_gaps = (cols - 1) * gap_x
+    total_pair_gaps = (bun_dan - 1) * pair_gap if seating_mode == "Paired" else 0
 
-    start_y = height - margin_y - cell_h
+    available_w = width - 80  # 좌우 여백 합 약 80
+    cell_w = (available_w - total_base_gaps - total_pair_gaps) / cols if cols > 0 else 40
 
-    for r, row in enumerate(matrix):
+    total_width = cols * cell_w + total_base_gaps + total_pair_gaps
+    start_x = (width - total_width) / 2  # 중앙 정렬 시작점
+
+    # 3) 책상 그리기
+    for r, row in enumerate(matrix_to_draw):
         y = start_y - r * (cell_h + gap_y)
-        x = margin_x
+        x = start_x
 
         for c_idx, desk in enumerate(row):
             if desk:
@@ -344,7 +353,7 @@ def draw_pdf_page(c, matrix, seating_mode, view_mode, bun_dan, title):
 
             c.setFillColor(black)
             if desk:
-                c.setFont(KOREAN_FONT, 16)  # 화면보다 2pt 정도 크게
+                c.setFont(KOREAN_FONT, 16)
                 c.drawCentredString(x + cell_w / 2, y + cell_h / 2 - 5, desk["name"])
             else:
                 c.setFont(KOREAN_FONT, 14)
@@ -355,14 +364,11 @@ def draw_pdf_page(c, matrix, seating_mode, view_mode, bun_dan, title):
             if seating_mode == "Paired" and c_idx % 2 == 1 and c_idx != cols - 1:
                 x += pair_gap
 
-    # 교탁
+    # 4) 교탁: 항상 맨 아래 중앙 (학생용에서도 글자와 절대 안 겹치게)
     desk_w = 130
     desk_h = 48
-    if view_mode == "teacher":
-        desk_y = margin_y - desk_h
-    else:
-        desk_y = height - margin_y + 10
     desk_x = width / 2 - desk_w / 2
+    desk_y = margin_y - desk_h  # 페이지 아래쪽
 
     c.setFillColor(HexColor("#eff6ff"))
     c.setStrokeColor(HexColor("#2563eb"))
@@ -419,7 +425,6 @@ with col2:
 
 
 if st.button("🎉 좌석 배치 생성", type="primary"):
-    # 좌석 수 체크
     if seating_mode == "Paired":
         seats_per_row = int(bun_dan) * 2
     else:
@@ -430,7 +435,7 @@ if st.button("🎉 좌석 배치 생성", type="primary"):
 
     if total_seats < num_students:
         st.error("⚠️ 좌석이 부족해요!")
-        st.warning(f"학생 {num_students}명 / 자리 {total_seats}석")
+        st.warning(f"학생 {num_students}명 / 자리 {total_se츠}석")
     else:
         matrix = assign_seats(STUDENTS_LIST, int(rows), int(bun_dan), seating_mode)
         st.session_state["matrix"] = matrix
