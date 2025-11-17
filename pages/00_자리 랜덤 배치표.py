@@ -15,8 +15,13 @@ from reportlab.pdfbase.ttfonts import TTFont
 
 
 # =====================================
-# 0. 폰트 설정 (MaruBuri → 없으면 기본)
+# 0. 기본 설정
 # =====================================
+
+# 🔹 여기만 네 시트 ID로 바꾸면 됨 (지금 링크에서 뽑은 ID 넣어둔 상태)
+# https://docs.google.com/spreadsheets/d/15c7dqXD7OE87InzW8SMUiSa50mEfp1WNyegTpPWZCMo/edit?gid=0#gid=0
+SPREADSHEET_ID = "15c7dqXD7OE87InzW8SMUiSa50mEfp1WNyegTpPWZCMo"
+
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 FONT_CANDIDATES = [
     os.path.join(BASE_DIR, "fonts", "MaruBuri-Regular.ttf"),
@@ -67,23 +72,14 @@ def create_sample_students_df():
 # 2. Google Sheets 에서 학생 데이터 불러오기
 # =====================================
 def load_student_data():
+    """
+    - secrets에서는 gcp_service_account만 사용
+    - spreadsheet_id는 코드 상단 SPREADSHEET_ID에서 직접 사용
+    """
     try:
         sa_info = st.secrets["gcp_service_account"]
     except Exception:
-        st.error("❌ secrets에 [gcp_service_account]가 없습니다. Settings → Secrets 확인해 주세요.")
-        return create_sample_students_df()
-
-    spreadsheet_id = st.secrets.get("spreadsheet_id", None)
-    if spreadsheet_id is None and isinstance(sa_info, dict):
-        spreadsheet_id = sa_info.get("spreadsheet_id", None)
-
-    if spreadsheet_id is None:
-        st.error(
-            "❌ secrets에서 spreadsheet_id를 찾지 못했습니다.\n\n"
-            "아래 둘 중 하나로 설정해 주세요.\n"
-            "1) 루트에: spreadsheet_id = \"시트ID\"\n"
-            "2) 또는 [gcp_service_account] 블록 안에: spreadsheet_id = \"시트ID\""
-        )
+        st.error("❌ secrets에 [gcp_service_account]가 없습니다. Settings → Secrets에서 서비스 계정 JSON 내용을 넣어주세요.")
         return create_sample_students_df()
 
     try:
@@ -91,8 +87,9 @@ def load_student_data():
         creds = Credentials.from_service_account_info(sa_info, scopes=scopes)
         client = gspread.authorize(creds)
 
-        sh = client.open_by_key(spreadsheet_id)
-        ws = sh.sheet1  # 첫 번째 시트 사용
+        # 🔥 spreadsheet_id는 더 이상 secrets에서 찾지 않고, 여기 상단의 SPREADSHEET_ID 사용
+        sh = client.open_by_key(SPREADSHEET_ID)
+        ws = sh.sheet1  # 첫 번째 시트
         records = ws.get_all_records()
 
         if not records:
@@ -276,8 +273,8 @@ def render_chart(matrix, view_mode, bun_dan, seating_mode):
 
     cols = len(matrix[0])
 
-    # 교사용: 교탁에서 보게 → 앞줄이 아래쪽이 되도록 행 순서 뒤집어서 표시
-    # 학생용: 종이에서 보게 → 앞줄이 위쪽 (그대로)
+    # 교사용: 교탁 기준으로 앞줄이 아래 → 행 순서 뒤집기
+    # 학생용: 앞줄이 위 → 그대로
     display_matrix = matrix[::-1] if view_mode == "teacher" else matrix
 
     grid_style = f"grid-template-columns: repeat({cols}, auto);"
@@ -373,7 +370,7 @@ def draw_seating_page(c, seating_matrix, seating_mode, view_mode, bun_dan, title
 
             c.setFillColor(black)
             if seat:
-                c.setFont(KOREAN_FONT_NAME, 14)  # 기존보다 +2 정도 크게
+                c.setFont(KOREAN_FONT_NAME, 14)  # 글자 조금 크게
                 c.drawCentredString(
                     x + cell_w / 2,
                     y + cell_h / 2 - 4,
