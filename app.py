@@ -30,51 +30,73 @@ random.shuffle(STUDENTS_LIST)  # 학생들을 무작위로 섞습니다.
 
 # --- 2. 좌석 배치 함수 ---
 
-def assign_seats(students, rows, cols, seating_mode):
+def assign_seats(student_list, rows, cols, mode):
     """
-    무작위로 좌석을 배치하고 성별에 따른 색상 정보를 포함합니다.
+    student_list: [{번호, 이름, 성별}, ...]
+    rows: 줄 수
+    cols: 분단 수
+    mode: "single" 또는 "pair"
     """
-    total_desks = rows * cols
-    
-    # 좌석 정보 저장 행렬 초기화 (rows x cols)
-    # 각 요소는 {name: '번호 이름', color: '색상'} 또는 None (빈 자리)
-    seating_matrix = [[None for _ in range(cols)] for _ in range(rows)]
-    
-    # 학생 정보를 이름과 색상으로 변환
-    student_info = []
-    for s in students:
-        color = '#F5B7B1' if s['Gender'] == 'F' else '#A9CCE3' # 핑크 (여자) / 블루 (남자)
-        student_info.append({'name': s['Full_Name'], 'color': color})
 
-    if seating_mode == 'Single': # 혼자 앉기
-        fill_list = student_info
-    else: # Paired (짝으로 앉기)
-        # 학생들을 2명씩 짝지어 유닛을 만듭니다.
-        # 남은 학생은 혼자 유닛이 됩니다.
-        paired_units = []
-        i = 0
-        while i < len(student_info):
-            if i + 1 < len(student_info):
-                # 짝으로 묶기 (두 학생의 정보를 리스트로 저장)
-                paired_units.str.append([student_info[i], student_info[i+1]])
-                i += 2
-            else:
-                # 혼자 남은 학생
-                paired_units.str.append([student_info[i]])
-                i += 1
-        random.shuffle(paired_units) # 짝지어진 유닛을 다시 섞습니다.
+    seats = []
 
-        # 총 필요한 책상 수 계산: 짝 유닛은 2칸, 홀 유닛은 1칸
-        # 여기서는 단순히 앞에서부터 채우되, 짝 모드에서는 한 유닛이 가로로 2칸을 차지합니다.
-        
-        fill_list = []
-        for unit in paired_units:
-            if len(unit) == 2:
-                # 짝은 두 칸을 사용
-                fill_list.extend(unit) 
+    # ========== 짝으로 앉기 ==========
+    if mode == "pair":
+        # 한 분단 = 2자리
+        seats_per_row = cols * 2
+        total_seats = seats_per_row * rows
+
+        # 학생 섞기
+        random.shuffle(student_list)
+
+        # 짝 단위로 묶기
+        paired = []
+        for i in range(0, len(student_list), 2):
+            if i + 1 < len(student_list):
+                paired.append([student_list[i], student_list[i+1]])  # 정상적인 짝
             else:
-                # 혼자는 한 칸을 사용
-                fill_list.extend(unit)
+                paired.append([student_list[i], None])  # 홀수면 마지막 학생은 혼자
+
+        # 2차원 좌석 배열 만들기
+        seat_matrix = []
+        idx = 0
+
+        for r in range(rows):
+            row_data = []
+            for c in range(cols):
+                if idx < len(paired):
+                    pair = paired[idx]
+                    # pair = [학생1, 학생2 or None]
+                    row_data.extend(pair)
+                else:
+                    row_data.extend([None, None])
+                idx += 1
+            seat_matrix.append(row_data)
+
+        return seat_matrix
+
+    # ========== 혼자 앉기 ==========
+    else:
+        seats_per_row = cols
+        total_seats = seats_per_row * rows
+
+        # 학생 섞기
+        random.shuffle(student_list)
+
+        seat_matrix = []
+        idx = 0
+        for r in range(rows):
+            row_data = []
+            for c in range(cols):
+                if idx < len(student_list):
+                    row_data.append(student_list[idx])
+                else:
+                    row_data.append(None)
+                idx += 1
+            seat_matrix.append(row_data)
+
+        return seat_matrix
+
                 
     
     # 좌석 채우기 (앞줄(0행) -> 뒷줄(rows-1행), 왼쪽(0열) -> 오른쪽(cols-1열) 순서)
